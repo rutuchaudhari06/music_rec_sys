@@ -1,0 +1,22 @@
+# Virtual environments
+env/
+venv/
+backend/env/
+backend/venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Build files
+dist/
+build/
+
+# Large ML models
+*.keras
+*.h5
+*.pt
+*.pth

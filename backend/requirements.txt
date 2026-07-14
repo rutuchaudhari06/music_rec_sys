@@ -1,0 +1,17 @@
+fastapi==0.139.0
+uvicorn==0.51.0
+pandas
+pyarrow
+numpy
+scipy
+transformers
+torch --index-url https://download.pytorch.org/whl/cpu
+sqlalchemy
+psycopg2-binary
+alembic
+cryptography
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt==4.2.1
+requests
+python-multipart
