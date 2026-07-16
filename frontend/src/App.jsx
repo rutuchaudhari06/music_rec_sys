@@ -19,14 +19,14 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [token, setToken] = useState(localStorage.getItem('token') || '');
   const [userEmail, setUserEmail] = useState('');
-  
+
   // Lists & scrolling navigation
   const [menuIndex, setMenuIndex] = useState(0);
 
   // Authentication forms
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
-  
+
   // Onboarding Seed Selection
   const [seedQuery, setSeedQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -44,7 +44,7 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progressPercent, setProgressPercent] = useState(0);
   const [likedStatus, setLikedStatus] = useState(false); // Visual heart indicator
-  
+
   // Spotify status & exports
   const [spotifyConnected, setSpotifyConnected] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
@@ -80,36 +80,31 @@ export default function App() {
   const fetchUserProfile = async () => {
     try {
       setLoading(true);
+
       const res = await fetch(`${API_BASE}/api/auth/me`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       });
+
       if (res.ok) {
         const data = await res.json();
+
         setUserEmail(data.email);
         checkSpotifyStatus();
-        
-        // Check if user has initialized preferences
-        const prefRes = await fetch(`${API_BASE}/api/recommendations`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ text: "initial test", limit: 1 })
-        });
-        
-        if (prefRes.ok) {
-          setCurrentScreen('HOME_MENU');
+
+        if (data.onboarding_completed) {
+          setCurrentScreen("HOME_MENU");
         } else {
-          // If recommendation calculation fails, user probably needs onboarding seeds
-          setCurrentScreen('ONBOARDING_SEARCH');
+          setCurrentScreen("ONBOARDING_SEARCH");
         }
       } else {
-        setToken('');
+        setToken("");
       }
     } catch (err) {
+      console.error(err);   // <-- add this
       showPopup("Network Error", "Could not connect to the backend server.");
-      setToken('');
+      setToken("");
     } finally {
       setLoading(false);
     }
@@ -121,9 +116,15 @@ export default function App() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
-        const data = await res.json();
-        setSpotifyConnected(data.connected);
-      }
+    const data = await res.json();
+
+    setSpotifyConnected(data.connected);
+
+    if (data.connected && pendingExport) {
+        setPendingExport(false);
+        exportPlaylist();
+    }
+}
     } catch (err) {
       console.error("Spotify status check failed", err);
     }
@@ -245,7 +246,7 @@ export default function App() {
         body: JSON.stringify({ seed_track_ids: selectedSeeds.map(s => s.track_id) })
       });
       if (res.ok) {
-        showPopup("Preferences Set", "Seeds registered! Welcome to MoodTunes.");
+        showPopup("Preferences Set", "Seeds registered! Welcome to Twirl.");
         setCurrentScreen('HOME_MENU');
         setMenuIndex(0);
       } else {
@@ -346,29 +347,51 @@ export default function App() {
   };
 
   // 6. Spotify connection & export playlist
-  const handleSpotifyConnect = () => {
-    const width = 500;
-    const height = 600;
-    const left = window.screen.width / 2 - width / 2;
-    const top = window.screen.height / 2 - height / 2;
-    
-    const popup = window.open(
-      `${API_BASE}/api/spotify/connect?token=${token}`,
-      "SpotifyConnect",
-      `width=${width},height=${height},left=${left},top=${top}`
-    );
-    
-    const timer = setInterval(() => {
-      if (popup.closed) {
-        clearInterval(timer);
-        checkSpotifyStatus();
-        showPopup("Spotify Status", "Sync connection refreshed.");
+  const handleSpotifyConnect = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch(`${API_BASE}/api/spotify/connect`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showPopup("Spotify Connect Failed", data.detail || "Could not start Spotify connection.");
+        return;
       }
-    }, 1000);
+
+      const width = 500;
+      const height = 600;
+      const left = window.screen.width / 2 - width / 2;
+      const top = window.screen.height / 2 - height / 2;
+
+      const popup = window.open(
+        data.auth_url,
+        "SpotifyConnect",
+        `width=${width},height=${height},left=${left},top=${top}`
+      );
+
+      if (!popup) {
+        showPopup("Popup Blocked", "Please allow popups to connect Spotify.");
+        return;
+      }
+
+      const timer = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(timer);
+          checkSpotifyStatus();
+          showPopup("Spotify Status", "Sync connection refreshed.");
+        }
+      }, 1000);
+    } catch (err) {
+      showPopup("Network Error", "Spotify connection endpoint unreachable.");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleExportPlaylist = async () => {
-    const finalName = playlistName.trim() || `MoodTunes: ${vibeOverride || detectedVibe}`;
+const exportPlaylist = async () => {
+    const finalName = playlistName.trim() || `Twirl: ${vibeOverride || detectedVibe}`;
     if (recommendations.length === 0) {
       showPopup("Export Error", "No recommendations available to export.");
       return;
@@ -400,6 +423,17 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+};
+
+  const handleExportPlaylist = async () => {
+
+    if (!spotifyConnected) {
+      setPendingExport(true);
+      handleSpotifyConnect();
+      return;
+    }
+    exportPlaylist();
+    
   };
 
   // 7. Virtual Audio Player logic
@@ -428,14 +462,14 @@ export default function App() {
   const handlePlayerForward = (isAuto = false) => {
     if (recommendations.length === 0) return;
     const currentTrack = recommendations[activeTrackIndex];
-    
+
     // Log skip interaction (only if user explicitly skips or it finished and we record it as skip)
     logInteraction(currentTrack.track_id, "skip");
-    
+
     setIsPlaying(false);
     setProgressPercent(0);
     setLikedStatus(false);
-    
+
     if (activeTrackIndex < recommendations.length - 1) {
       setActiveTrackIndex(activeTrackIndex + 1);
       setIsPlaying(true);
@@ -449,19 +483,19 @@ export default function App() {
     // Dislike current track, remove it, update vector, and load next
     if (recommendations.length === 0) return;
     const currentTrack = recommendations[activeTrackIndex];
-    
+
     // Log dislike/remove interaction
     logInteraction(currentTrack.track_id, "dislike");
-    
+
     setIsPlaying(false);
     setProgressPercent(0);
     setLikedStatus(false);
     showPopup("Track Removed", "Dislike recorded. Refining recommendation vector...");
-    
+
     // Remove the track from active recommendations list
     const updatedRecs = recommendations.filter((_, idx) => idx !== activeTrackIndex);
     setRecommendations(updatedRecs);
-    
+
     if (updatedRecs.length > 0) {
       // Keep same index if within bounds, otherwise wrap to start
       const nextIdx = activeTrackIndex >= updatedRecs.length ? 0 : activeTrackIndex;
@@ -475,7 +509,7 @@ export default function App() {
   const handlePlayerLike = () => {
     if (recommendations.length === 0) return;
     const currentTrack = recommendations[activeTrackIndex];
-    
+
     logInteraction(currentTrack.track_id, "like");
     setLikedStatus(true);
     showPopup("Loved Track!", "Added to preferences (+1 Love weight)");
@@ -488,13 +522,13 @@ export default function App() {
     const rect = wheelRef.current.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
-    
+
     const clientX = e.clientX || (e.touches && e.touches[0].clientX);
     const clientY = e.clientY || (e.touches && e.touches[0].clientY);
-    
+
     const x = clientX - centerX;
     const y = clientY - centerY;
-    
+
     startAngleRef.current = Math.atan2(y, x);
     angleAccumulatorRef.current = 0;
   };
@@ -504,30 +538,30 @@ export default function App() {
     const rect = wheelRef.current.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
-    
+
     const clientX = e.clientX || (e.touches && e.touches[0].clientX);
     const clientY = e.clientY || (e.touches && e.touches[0].clientY);
-    
+
     const x = clientX - centerX;
     const y = clientY - centerY;
-    
+
     const currentAngle = Math.atan2(y, x);
     let delta = currentAngle - startAngleRef.current;
-    
+
     // Handle wrap around jump
     if (delta > Math.PI) delta -= 2 * Math.PI;
     if (delta < -Math.PI) delta += 2 * Math.PI;
-    
+
     // Sensitivity threshold (rad)
-    const threshold = 0.22; 
+    const threshold = 0.22;
     angleAccumulatorRef.current += delta;
-    
+
     if (Math.abs(angleAccumulatorRef.current) >= threshold) {
       const direction = angleAccumulatorRef.current > 0 ? 1 : -1;
       triggerWheelScroll(direction);
       angleAccumulatorRef.current = 0; // reset
     }
-    
+
     startAngleRef.current = currentAngle;
   };
 
@@ -560,7 +594,7 @@ export default function App() {
   const triggerWheelScroll = (direction) => {
     const listLen = getListLengthForScreen(currentScreen);
     if (listLen <= 0) return;
-    
+
     if (currentScreen === 'LOGIN' || currentScreen === 'SIGNUP') {
       setFocusedFormIndex(prev => {
         let next = prev + direction;
@@ -653,7 +687,7 @@ export default function App() {
         if (menuIndex === recommendations.length) {
           // Export playlist item
           setCurrentScreen('EXPORT_PLAYLIST');
-          setPlaylistName(`MoodTunes: ${vibeOverride || detectedVibe}`);
+          setPlaylistName(`Twirl: ${vibeOverride || detectedVibe}`);
           setFocusedFormIndex(0);
         } else {
           // Selected a song from recommendations list to play
@@ -738,6 +772,9 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentScreen, menuIndex, focusedFormIndex, searchResults, recommendations, activeTrackIndex, moodText, selectedSeeds, playlistName]);
 
+  const [pendingExport, setPendingExport] = useState(false);
+
+
   return (
     <div className="ipod-container">
       {/* iPod top jacks */}
@@ -750,13 +787,13 @@ export default function App() {
           {/* Status Bar */}
           <div className="screen-header">
             <span>{isPlaying ? "► Playing" : "|| Paused"}</span>
-            <span style={{ fontWeight: 'bold' }}>MoodTunes</span>
+            <span style={{ fontWeight: 'bold' }}>Twirl</span>
             <span>[===]</span>
           </div>
 
           {/* Screen Content Switcher */}
           <div className="screen-content">
-            
+
             {/* Status Modal Overlay */}
             {showStatus && (
               <div className="screen-overlay">
@@ -779,7 +816,7 @@ export default function App() {
             {currentScreen === 'WELCOME' && (
               <ul className="retro-list">
                 <li style={{ padding: '8px', fontSize: '14px', fontWeight: 'bold', borderBottom: '1.5px solid var(--screen-text)', textAlign: 'center' }}>
-                  MoodTunes iPod
+                  Twirl iPod
                 </li>
                 <li className={`retro-item ${menuIndex === 0 ? 'selected' : ''}`} onClick={() => { setMenuIndex(0); setCurrentScreen('LOGIN'); }}>
                   <span>Login</span>
@@ -823,8 +860,8 @@ export default function App() {
                     placeholder="******"
                   />
                 </div>
-                <div 
-                  className={`retro-item ${focusedFormIndex === 2 ? 'selected' : ''}`} 
+                <div
+                  className={`retro-item ${focusedFormIndex === 2 ? 'selected' : ''}`}
                   onClick={handleLogin}
                   style={{ justifyContent: 'center', fontWeight: 'bold', border: '1.5px solid var(--screen-text)', marginTop: '8px', padding: '4px' }}
                 >
@@ -862,8 +899,8 @@ export default function App() {
                     placeholder="******"
                   />
                 </div>
-                <div 
-                  className={`retro-item ${focusedFormIndex === 2 ? 'selected' : ''}`} 
+                <div
+                  className={`retro-item ${focusedFormIndex === 2 ? 'selected' : ''}`}
                   onClick={handleSignup}
                   style={{ justifyContent: 'center', fontWeight: 'bold', border: '1.5px solid var(--screen-text)', marginTop: '8px', padding: '4px' }}
                 >
@@ -886,14 +923,14 @@ export default function App() {
                     onKeyDown={(e) => e.key === 'Enter' && handleSeedSearch()}
                     placeholder="Search seed songs..."
                   />
-                  <button 
+                  <button
                     onClick={handleSeedSearch}
                     style={{ background: 'transparent', border: '1px solid var(--screen-text)', fontSize: '10px', color: 'var(--screen-text)', cursor: 'pointer' }}
                   >
                     Go
                   </button>
                 </div>
-                
+
                 {/* Search Result Tracks */}
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                   {searchResults.length === 0 ? (
@@ -910,7 +947,7 @@ export default function App() {
                       {searchResults.map((track, idx) => {
                         const isChosen = selectedSeeds.some(s => s.track_id === track.track_id);
                         return (
-                          <li 
+                          <li
                             key={track.track_id}
                             className={`retro-item ${menuIndex === idx ? 'selected' : ''}`}
                             onClick={() => toggleSeedSelect(track)}
@@ -931,9 +968,9 @@ export default function App() {
                     </ul>
                   )}
                 </div>
-                
+
                 {/* Fixed Footer with selections check */}
-                <div 
+                <div
                   onClick={selectedSeeds.length >= 3 ? submitSeeds : undefined}
                   style={{
                     padding: '6px 8px',
@@ -986,8 +1023,8 @@ export default function App() {
                   onChange={(e) => setMoodText(e.target.value)}
                   placeholder="Type 2-3 sentences here. E.g. 'I had a really busy day at work. Now I just want to sit back, relax, and listen to some chilled out acoustic beats.'"
                 />
-                <div 
-                  className="retro-item selected" 
+                <div
+                  className="retro-item selected"
                   onClick={getDetectedEmotion}
                   style={{ justifyContent: 'center', fontWeight: 'bold', border: '1.5px solid var(--screen-text)', marginTop: '8px', padding: '4px', textAlign: 'center' }}
                 >
@@ -1008,7 +1045,7 @@ export default function App() {
                   <span className="retro-item-arrow">►</span>
                 </li>
                 {VIBES.map((v, idx) => (
-                  <li 
+                  <li
                     key={v}
                     className={`retro-item ${menuIndex === idx + 1 ? 'selected' : ''}`}
                     onClick={() => { setVibeOverride(v); fetchRecommendations(v); }}
@@ -1026,7 +1063,7 @@ export default function App() {
                 <div style={{ padding: '5px 8px', borderBottom: '1px solid var(--screen-text)', fontSize: '11px', fontWeight: 'bold', textAlign: 'center' }}>
                   {vibeOverride || detectedVibe} Recs ({recommendations.length})
                 </div>
-                
+
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                   <ul className="retro-list">
                     {recommendations.map((track, idx) => (
@@ -1051,9 +1088,9 @@ export default function App() {
                         <span style={{ fontSize: '10px' }}>►</span>
                       </li>
                     ))}
-                    
+
                     {/* Spotify export shortcut at the bottom of the list */}
-                    <li 
+                    <li
                       className={`retro-item ${menuIndex === recommendations.length ? 'selected' : ''}`}
                       onClick={() => setCurrentScreen('EXPORT_PLAYLIST')}
                       style={{ borderTop: '1.5px solid var(--screen-text)', padding: '6px 8px', backgroundColor: 'rgba(0,0,0,0.05)' }}
@@ -1082,7 +1119,7 @@ export default function App() {
                   <div className="now-playing-album">
                     {recommendations[activeTrackIndex].album_name}
                   </div>
-                  
+
                   {likedStatus && (
                     <div style={{ fontSize: '14px', color: '#cc0000', marginTop: '4px', fontWeight: 'bold' }}>
                       ♥ LIKED
@@ -1123,15 +1160,19 @@ export default function App() {
                     style={{ border: focusedFormIndex === 0 ? '2px solid black' : '1.5px solid var(--screen-text)' }}
                   />
                 </div>
-                
-                <div 
-                  className={`retro-item ${focusedFormIndex === 1 ? 'selected' : ''}`} 
+
+                <div
+                  className={`retro-item ${focusedFormIndex === 1 ? 'selected' : ''}`}
                   onClick={handleExportPlaylist}
                   style={{ justifyContent: 'center', fontWeight: 'bold', border: '1.5px solid var(--screen-text)', marginTop: '8px', padding: '4px', textAlign: 'center' }}
                 >
                   Create & Export
                 </div>
-                <div className="retro-hint">Make sure Spotify is connected!</div>
+                <div className="retro-hint">
+                  {spotifyConnected
+                    ? "Ready to export!"
+                    : "Spotify isn't connected. Clicking Export will connect it first."}
+                </div>
               </div>
             )}
 
@@ -1140,7 +1181,7 @@ export default function App() {
       </div>
 
       {/* Physical click-wheel */}
-      <div 
+      <div
         className="click-wheel-container"
         ref={wheelRef}
         onMouseDown={handleWheelMouseDown}
@@ -1173,7 +1214,7 @@ export default function App() {
             handleSelectClick(); // center action fallback
           }
         }}>▶||</button>
-        
+
         {/* Center select button */}
         <button className="select-button" onClick={handleSelectClick}></button>
       </div>

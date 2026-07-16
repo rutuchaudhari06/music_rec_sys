@@ -2,14 +2,19 @@ import os
 import sys
 import datetime
 import logging
+import secrets
+import hashlib
+import base64
 from fastapi import FastAPI, HTTPException, Query, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 from jose import jwt
 import numpy as np
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
+from app.database import get_db
 
 # Setup logger
 logging.basicConfig(level=logging.INFO)
@@ -31,10 +36,13 @@ from app.ml.recommender import recommender
 from app.services import spotify as spotify_service
 
 app = FastAPI(
-    title="MoodTunes API",
-    description="Backend API for MoodTunes music recommendation platform",
+    title="Twirl API",
+    description="Backend API for Twirl music recommendation platform",
     version="0.1.0"
 )
+
+# One-time OAuth state storage for Spotify connect flow
+oauth_state_store = {}
 
 # CORS configuration
 app.add_middleware(
@@ -71,10 +79,11 @@ class EmotionResponse(BaseModel):
     target_valence: float
     target_arousal: float
 
+
 class RecommendationRequest(BaseModel):
     text: str
     vibe_override: Optional[str] = None
-    limit: Optional[int] = 20
+    limit: int = Field(default=20, ge=1, le=50)
 
 class RecommendationTestRequest(BaseModel):
     target_valence: float
@@ -102,7 +111,7 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Error creating database tables: {e}")
         
-    logger.info("Starting MoodTunes API ML loading...")
+    logger.info("Starting Twirl API ML loading...")
     parquet_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "dataset.parquet")
     if not os.path.exists(parquet_path):
         logger.warning(
@@ -118,7 +127,7 @@ async def startup_event():
 
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to the MoodTunes API!", "status": "online"}
+    return {"message": "Welcome to the Twirl API!", "status": "online"}
 
 # ----------------- AUTHENTICATION ENDPOINTS -----------------
 
@@ -156,11 +165,19 @@ def login(request: UserLogin, db: Session = Depends(get_db)):
     }
 
 @app.get("/api/auth/me")
-def get_me(current_user: User = Depends(get_current_user)):
+def get_me(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    
     """Returns current user information to check token validity."""
+    pref = db.query(UserPreference).filter(
+        UserPreference.user_id == current_user.id
+    ).first()
     return {
         "id": current_user.id,
-        "email": current_user.email
+        "email": current_user.email,
+        "onboarding_completed": pref is not None
     }
 
 # ----------------- ML & RECOMMENDATION ENDPOINTS -----------------
@@ -382,41 +399,56 @@ def test_recommendations(request: RecommendationTestRequest):
 # ----------------- SPOTIFY INTEGRATION ENDPOINTS -----------------
 
 @app.get("/api/spotify/connect")
-def connect_spotify(token: str = Query(..., description="JWT token of the authenticated user")):
+def connect_spotify(current_user: User = Depends(get_current_user)):
     """
-    Redirects the user's browser to Spotify authorization screen.
-    Uses the user's token as state to match them during callback.
+    Creates a one-time OAuth state and returns the Spotify authorization URL.
     """
-    try:
-        # Validate JWT token
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        email = payload.get("sub")
-        if not email:
-            raise Exception("Invalid token structure")
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token.")
-        
+    state = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode("utf-8")).digest()
+    ).decode("utf-8").rstrip("=")
+
+    oauth_state_store[state] = {
+        "user_id": current_user.id,
+        "expires_at": datetime.datetime.utcnow() + datetime.timedelta(minutes=10),
+        "code_verifier": code_verifier,
+        "used": False,
+    }
+
     auth_url = spotify_service.get_spotify_auth_url()
-    # Pass user JWT as the OAuth state parameter
-    auth_url += f"&state={token}"
-    return RedirectResponse(auth_url)
+    auth_url += (
+        f"&state={state}"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
+    )
+    return {"auth_url": auth_url}
 
 @app.get("/api/spotify/callback", response_class=HTMLResponse)
 def spotify_callback(code: str = Query(...), state: str = Query(...), db: Session = Depends(get_db)):
     """Receives callback from Spotify, exchanges credentials and stores them securely."""
     try:
-        # 1. Verify user using the token passed in state
-        payload = jwt.decode(state, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        email = payload.get("sub")
-        if not email:
-            raise Exception("State did not contain user context.")
-            
-        user = db.query(User).filter(User.email == email).first()
+        state_data = oauth_state_store.get(state)
+        if not state_data:
+            raise Exception("Invalid or expired OAuth state.")
+        if state_data.get("used"):
+            raise Exception("OAuth state has already been used.")
+        if state_data.get("expires_at", datetime.datetime.utcnow()) < datetime.datetime.utcnow():
+            oauth_state_store.pop(state, None)
+            raise Exception("OAuth state expired.")
+
+        state_data["used"] = True
+        oauth_state_store.pop(state, None)
+
+        user = db.query(User).filter(User.id == state_data["user_id"]).first()
         if not user:
             raise Exception("User not found.")
             
         # 2. Exchange code for credentials
-        tokens = spotify_service.exchange_code_for_tokens(code)
+        tokens = spotify_service.exchange_code_for_tokens(
+            code,
+            code_verifier=state_data.get("code_verifier")
+        )
         
         # 3. Encrypt and store credentials
         encrypted_access = spotify_service.encrypt_token(tokens["access_token"])

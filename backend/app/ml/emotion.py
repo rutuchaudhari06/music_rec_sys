@@ -130,7 +130,9 @@ class EmotionClassifier:
         # Run prediction
         predictions = self.pipeline(text)
         # The output format is [[{"label": "anger", "score": 0.01}, ...]]
-        return predictions[0]
+
+        return predictions
+        # return predictions[0]
 
     def get_vibe_and_coordinates(self, text: str) -> Tuple[str, float, float]:
         """

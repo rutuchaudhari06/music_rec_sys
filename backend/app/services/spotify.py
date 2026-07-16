@@ -33,7 +33,7 @@ def get_spotify_auth_url() -> str:
     )
     return auth_url
 
-def exchange_code_for_tokens(code: str) -> Dict:
+def exchange_code_for_tokens(code: str, code_verifier: Optional[str] = None) -> Dict:
     """Exchanges an OAuth code from redirect callback for Spotify credentials."""
     auth_header = base64.b64encode(f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()).decode()
     headers = {
@@ -45,6 +45,8 @@ def exchange_code_for_tokens(code: str) -> Dict:
         "code": code,
         "redirect_uri": SPOTIFY_REDIRECT_URI
     }
+    if code_verifier:
+        data["code_verifier"] = code_verifier
     
     response = requests.post("https://accounts.spotify.com/api/token", headers=headers, data=data)
     if response.status_code != 200:
@@ -106,9 +108,23 @@ def get_spotify_user_profile(access_token: str) -> Dict:
 def create_playlist_and_add_tracks(user_id: int, db: Session, playlist_name: str, track_ids: List[str]) -> Dict:
     """Creates a Spotify playlist and adds the recommended tracks to it."""
     access_token = get_valid_access_token(user_id, db)
+    headers = {
+        "Authorization": f"Bearer {access_token}"
+    }
+
+    r = requests.get(
+        "https://api.spotify.com/v1/me",
+        headers=headers
+    )
+
+    print(r.status_code)
+    print(r.text)
     
     # 1. Get Spotify user ID
     user_profile = get_spotify_user_profile(access_token)
+    print("========== USER PROFILE ==========")
+    print(user_profile)
+    print("==================================")
     spotify_user_id = user_profile["id"]
     
     # 2. Create the playlist
@@ -118,12 +134,18 @@ def create_playlist_and_add_tracks(user_id: int, db: Session, playlist_name: str
     }
     playlist_data = {
         "name": playlist_name,
-        "description": "Created with MoodTunes - your vintage iPod emotion recommender.",
+        "description": "Created with Twirl - your vintage iPod emotion recommender.",
         "public": True
     }
     
-    create_url = f"https://api.spotify.com/v1/users/{spotify_user_id}/playlists"
+    create_url = "https://api.spotify.com/v1/me/playlists"
     response = requests.post(create_url, headers=headers, json=playlist_data)
+
+    print("========== CREATE PLAYLIST ==========")
+    print("Status:", response.status_code)
+    print("Headers:", response.headers)
+    print("Body:", response.text)
+    print("====================================")
     if response.status_code not in (200, 201):
         raise Exception(f"Failed to create Spotify playlist: {response.text}")
         
@@ -141,12 +163,19 @@ def create_playlist_and_add_tracks(user_id: int, db: Session, playlist_name: str
             else:
                 track_uris.append(f"spotify:track:{tid}")
                 
-        add_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+        add_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/items"
         
         # Batch adding tracks (Spotify API allows max 100 tracks per call)
         for i in range(0, len(track_uris), 100):
             batch = track_uris[i:i+100]
+            print("========== ADD TRACKS ==========")
+            print("URL:", add_url)
+            print("Headers:", headers)
+            print("Body:", {"uris": batch})
             add_res = requests.post(add_url, headers=headers, json={"uris": batch})
+
+            print("Status:", add_res.status_code)
+            print("Response:", add_res.text)
             if add_res.status_code not in (200, 201):
                 raise Exception(f"Failed to add tracks to playlist: {add_res.text}")
                 

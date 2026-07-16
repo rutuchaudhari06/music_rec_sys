@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 # Database Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./moodtunes.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./Twirl.db")
 
 # JWT Configuration
 JWT_SECRET = os.getenv("JWT_SECRET")
@@ -17,7 +17,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 10080
 # Spotify Configuration
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
-SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://localhost:8000/api/spotify/callback")
+SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8000/api/spotify/callback")
 
 # Encryption Key for token storage
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
