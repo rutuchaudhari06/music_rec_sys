@@ -47,7 +47,10 @@ oauth_state_store = {}
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, restrict this
+    allow_origins=[
+        "http://localhost:5173",
+        "https://twirl-music-rec-sys.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
